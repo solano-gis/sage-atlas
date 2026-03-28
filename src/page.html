@@ -161,6 +161,14 @@
               spatialReference: { wkid: 4326 }
             });
             await view.goTo(ext, { duration: 0 });
+          } else if (target.pixel) {
+            // Convert screen pixel [x, y] to map coordinates and center there
+            var mapPoint = view.toMap({ x: target.pixel[0], y: target.pixel[1] });
+            if (!mapPoint) throw new Error("Pixel outside map view: " + target.pixel);
+            await view.goTo({
+              center: mapPoint,
+              zoom: target.zoom || view.zoom
+            }, { duration: 0 });
           } else if (target.center) {
             await view.goTo({
               center: target.center,

@@ -105,6 +105,7 @@ program
   .option("--extent <xmin,ymin,xmax,ymax>", "Map extent")
   .option("--zoom <number>", "Zoom level", parseInt)
   .option("--padding <number>", "Padding in pixels", parseInt)
+  .option("--pixel <x,y>", "Center on this screen pixel from the last screenshot")
   .option("--webmap <name-or-id>", "Web map preset name or AGOL item ID")
   .action(async (opts) => {
     const info = await ensureDaemon();
@@ -113,6 +114,7 @@ program
     if (opts.address) args.address = opts.address;
     if (opts.center) args.center = opts.center.split(",").map(Number);
     if (opts.extent) args.extent = opts.extent.split(",").map(Number);
+    if (opts.pixel) args.pixel = opts.pixel.split(",").map(Number);
     if (opts.zoom) args.zoom = opts.zoom;
     if (opts.padding) args.padding = opts.padding;
     if (opts.webmap) args.webmap = opts.webmap;
