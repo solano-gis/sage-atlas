@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://js.arcgis.com/4.34/esri/themes/light/main.css">
+  <script src="https://js.arcgis.com/4.34/"></script>
+  <style>
+    html, body, #viewDiv {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div id="viewDiv"></div>
+  <script>
+    require([
+      "esri/WebMap",
+      "esri/views/MapView",
+      "esri/layers/GraphicsLayer",
+      "esri/layers/GeoJSONLayer",
+      "esri/Graphic",
+      "esri/geometry/Point",
+      "esri/geometry/Polygon",
+      "esri/geometry/Polyline",
+      "esri/geometry/Circle",
+      "esri/geometry/Extent",
+      "esri/symbols/SimpleFillSymbol",
+      "esri/symbols/SimpleMarkerSymbol",
+      "esri/symbols/SimpleLineSymbol",
+      "esri/symbols/TextSymbol",
+      "esri/rest/locator",
+      "esri/Color"
+    ], function(
+      WebMap, MapView, GraphicsLayer, GeoJSONLayer, Graphic,
+      Point, Polygon, Polyline, Circle, Extent,
+      SimpleFillSymbol, SimpleMarkerSymbol, SimpleLineSymbol, TextSymbol,
+      locator, Color
+    ) {
+      const params = new URLSearchParams(window.location.search);
+      const webmapId = params.get("webmap") || "a30df87e755e4cab87acb5d9181bc11c";
+
+      const webmap = new WebMap({ portalItem: { id: webmapId } });
+      const highlightLayer = new GraphicsLayer({ title: "_highlights", listMode: "hide" });
+      const overlayGroup = new GraphicsLayer({ title: "_overlays", listMode: "hide" });
+      const annotationLayer = new GraphicsLayer({ title: "_annotations", listMode: "hide" });
+
+      const view = new MapView({
+        container: "viewDiv",
+        map: webmap,
+        ui: { components: [] }
+      });
+
+      webmap.addMany([highlightLayer, overlayGroup, annotationLayer]);
+
+      // Wait for tiles to finish loading
+      function waitForTiles(timeout) {
+        timeout = timeout || 10000;
+        return new Promise(function(resolve) {
+          if (!view.updating) { resolve(); return; }
+          var timer = setTimeout(function() { resolve(); }, timeout);
+          var handle = view.watch("updating", function(updating) {
+            if (!updating) {
+              handle.remove();
+              clearTimeout(timer);
+              // Extra settle time for tile rendering
+              setTimeout(resolve, 500);
+            }
+          });
+        });
+      }
+
+      webmap.load().then(function() {
+        console.log("WebMap loaded: " + webmap.portalItem.title);
+      }).catch(function(err) {
+        console.error("WebMap load FAILED: " + (err.message || err));
+        document.title = "ERROR";
+      });
+
+      view.when(function() {
+        console.log("MapView ready");
+        document.title = "READY";
+
+        // --- Navigation ---
+        window.atlasGoTo = async function(target) {
+          if (target.apn) {
+            // Find parcel layer
+            var parcelLayer = null;
+            webmap.allLayers.forEach(function(l) {
+              if (l.type === "feature" && l.title && l.title.toLowerCase().includes("parcel")) {
+                parcelLayer = l;
+              }
+            });
+            if (!parcelLayer) throw new Error("No parcel layer found in web map");
+
+            var query = parcelLayer.createQuery();
+            query.where = "APN = '" + target.apn.replace(/'/g, "''") + "'";
+            query.returnGeometry = true;
+            query.outSpatialReference = view.spatialReference;
+            var result = await parcelLayer.queryFeatures(query);
+            if (result.features.length === 0) {
+              // Try without dashes
+              var clean = target.apn.replace(/-/g, "");
+              query.where = "REPLACE(APN, '-', '') = '" + clean + "'";
+              result = await parcelLayer.queryFeatures(query);
+            }
+            if (result.features.length === 0) throw new Error("APN not found: " + target.apn);
+
+            var extent = result.features[0].geometry.extent;
+            var padding = target.padding || 50;
+            await view.goTo({ target: extent.expand(1.5) }, { duration: 0 });
+            if (target.zoom) await view.goTo({ zoom: target.zoom }, { duration: 0 });
+          } else if (target.address) {
+            var results = await locator.addressToLocations(
+              "https://geocode-api.arcgis.com/arcgis/rest/services/World/GeocodeServer",
+              { address: { SingleLine: target.address }, maxLocations: 1 }
+            );
+            if (results.length === 0) throw new Error("Address not found: " + target.address);
+            var loc = results[0].location;
+            await view.goTo({ center: loc, zoom: target.zoom || 17 }, { duration: 0 });
+          } else if (target.extent) {
+            var parts = target.extent;
+            var ext = new Extent({
+              xmin: parts[0], ymin: parts[1], xmax: parts[2], ymax: parts[3],
+              spatialReference: { wkid: 4326 }
+            });
+            await view.goTo(ext, { duration: 0 });
+          } else if (target.center) {
+            await view.goTo({
+              center: target.center,
+              zoom: target.zoom || 15
+            }, { duration: 0 });
+          }
+
+          await waitForTiles();
+          return {
+            center: [view.center.longitude, view.center.latitude],
+            zoom: view.zoom,
+            scale: view.scale
+          };
+        };
+
+        // --- Zoom ---
+        window.atlasZoom = async function(direction, levels) {
+          levels = levels || 2;
+          var newZoom = direction === "in" ? view.zoom + levels : view.zoom - levels;
+          await view.goTo({ zoom: Math.max(1, Math.min(23, newZoom)) }, { duration: 0 });
+          await waitForTiles();
+          return { zoom: view.zoom, scale: view.scale };
+        };
+
+        // --- Layer Control ---
+        window.atlasLayers = async function(show, hide) {
+          var result = [];
+          webmap.allLayers.forEach(function(layer) {
+            if (layer.title && !layer.title.startsWith("_")) {
+              if (show && show.includes(layer.title)) layer.visible = true;
+              if (hide && hide.includes(layer.title)) layer.visible = false;
+              result.push({ title: layer.title, visible: layer.visible, type: layer.type });
+            }
+          });
+          if (show || hide) await waitForTiles();
+          return result;
+        };
+
+        // --- Highlight ---
+        window.atlasHighlight = async function(opts) {
+          if (opts.clear) { highlightLayer.removeAll(); return { cleared: true }; }
+
+          var style = opts.style || {};
+          var fillColor = style.color || [255, 255, 0, 0.3];
+          var outlineColor = style.outlineColor || [255, 0, 0, 1];
+          var outlineWidth = style.outlineWidth || 3;
+
+          var symbol = new SimpleFillSymbol({
+            color: new Color(fillColor),
+            outline: { color: new Color(outlineColor), width: outlineWidth }
+          });
+
+          if (opts.apns && opts.apns.length > 0) {
+            var parcelLayer = null;
+            webmap.allLayers.forEach(function(l) {
+              if (l.type === "feature" && l.title && l.title.toLowerCase().includes("parcel")) {
+                parcelLayer = l;
+              }
+            });
+            if (!parcelLayer) throw new Error("No parcel layer found");
+
+            var whereClause = opts.apns.map(function(apn) {
+              return "APN = '" + apn.replace(/'/g, "''") + "'";
+            }).join(" OR ");
+
+            var query = parcelLayer.createQuery();
+            query.where = whereClause;
+            query.returnGeometry = true;
+            query.outSpatialReference = view.spatialReference;
+            var result = await parcelLayer.queryFeatures(query);
+
+            result.features.forEach(function(f) {
+              highlightLayer.add(new Graphic({ geometry: f.geometry, symbol: symbol }));
+            });
+
+            return { highlighted: result.features.length };
+          }
+
+          return { highlighted: 0 };
+        };
+
+        // --- Overlay ---
+        window.atlasOverlay = async function(opts) {
+          if (opts.remove) {
+            // Remove overlay by id
+            var toRemove = [];
+            overlayGroup.graphics.forEach(function(g) {
+              if (g.attributes && g.attributes._overlayId === opts.id) toRemove.push(g);
+            });
+            toRemove.forEach(function(g) { overlayGroup.remove(g); });
+            return { removed: toRemove.length };
+          }
+
+          var geojson = opts.geojson;
+          if (typeof geojson === "string") geojson = JSON.parse(geojson);
+
+          var style = opts.style || {};
+          var features = geojson.features || [];
+          var count = 0;
+
+          features.forEach(function(feature) {
+            var geom = feature.geometry;
+            var props = feature.properties || {};
+            var graphic;
+
+            if (geom.type === "Point") {
+              graphic = new Graphic({
+                geometry: new Point({ longitude: geom.coordinates[0], latitude: geom.coordinates[1] }),
+                symbol: new SimpleMarkerSymbol({
+                  color: new Color(style.color || [255, 0, 0, 0.8]),
+                  size: style.size || 8,
+                  outline: { color: new Color(style.outlineColor || [0, 0, 0, 1]), width: 1 }
+                }),
+                attributes: Object.assign({ _overlayId: opts.id }, props)
+              });
+            } else if (geom.type === "Polygon") {
+              graphic = new Graphic({
+                geometry: new Polygon({
+                  rings: geom.coordinates,
+                  spatialReference: { wkid: 4326 }
+                }),
+                symbol: new SimpleFillSymbol({
+                  color: new Color(style.color || [0, 0, 255, 0.3]),
+                  outline: { color: new Color(style.outlineColor || [0, 0, 255, 1]), width: 2 }
+                }),
+                attributes: Object.assign({ _overlayId: opts.id }, props)
+              });
+            } else if (geom.type === "LineString") {
+              graphic = new Graphic({
+                geometry: new Polyline({
+                  paths: [geom.coordinates],
+                  spatialReference: { wkid: 4326 }
+                }),
+                symbol: new SimpleLineSymbol({
+                  color: new Color(style.color || [255, 0, 0, 1]),
+                  width: style.width || 2
+                }),
+                attributes: Object.assign({ _overlayId: opts.id }, props)
+              });
+            }
+
+            if (graphic) {
+              overlayGroup.add(graphic);
+              count++;
+
+              // Add label if requested
+              if (opts.labelField && props[opts.labelField]) {
+                var centroid = graphic.geometry.extent
+                  ? graphic.geometry.extent.center
+                  : graphic.geometry;
+                overlayGroup.add(new Graphic({
+                  geometry: centroid,
+                  symbol: new TextSymbol({
+                    text: String(props[opts.labelField]),
+                    color: "black",
+                    haloColor: "white",
+                    haloSize: 1,
+                    font: { size: 10 }
+                  }),
+                  attributes: { _overlayId: opts.id }
+                }));
+              }
+            }
+          });
+
+          await waitForTiles();
+          return { added: count };
+        };
+
+        // --- Annotate ---
+        window.atlasAnnotate = async function(opts) {
+          if (opts.clear) { annotationLayer.removeAll(); return { cleared: true }; }
+
+          var annotations = opts.annotations || [];
+          var count = 0;
+
+          annotations.forEach(function(ann) {
+            var point = new Point({ longitude: ann.position[0], latitude: ann.position[1] });
+            var color = ann.color || [255, 0, 0, 1];
+
+            if (ann.type === "text") {
+              annotationLayer.add(new Graphic({
+                geometry: point,
+                symbol: new TextSymbol({
+                  text: ann.text || "",
+                  color: new Color(color),
+                  haloColor: "white",
+                  haloSize: 2,
+                  font: { size: 14, weight: "bold" }
+                })
+              }));
+              count++;
+            } else if (ann.type === "circle") {
+              var circle = new Circle({
+                center: point,
+                radius: ann.radius || 500,
+                radiusUnit: "feet"
+              });
+              annotationLayer.add(new Graphic({
+                geometry: circle,
+                symbol: new SimpleFillSymbol({
+                  color: new Color([color[0], color[1], color[2], 0.2]),
+                  outline: { color: new Color(color), width: 2 }
+                })
+              }));
+              count++;
+            } else if (ann.type === "arrow" && ann.endPosition) {
+              var line = new Polyline({
+                paths: [[ann.position, ann.endPosition]],
+                spatialReference: { wkid: 4326 }
+              });
+              annotationLayer.add(new Graphic({
+                geometry: line,
+                symbol: new SimpleLineSymbol({
+                  color: new Color(color),
+                  width: 2,
+                  marker: { style: "arrow", placement: "end" }
+                })
+              }));
+              count++;
+            }
+          });
+
+          return { added: count };
+        };
+
+        // --- State ---
+        window.atlasGetState = function() {
+          var layers = [];
+          webmap.allLayers.forEach(function(l) {
+            if (l.title && !l.title.startsWith("_")) {
+              layers.push({ title: l.title, visible: l.visible, type: l.type });
+            }
+          });
+          return {
+            center: [view.center.longitude, view.center.latitude],
+            zoom: view.zoom,
+            scale: view.scale,
+            extent: {
+              xmin: view.extent.xmin, ymin: view.extent.ymin,
+              xmax: view.extent.xmax, ymax: view.extent.ymax
+            },
+            layers: layers
+          };
+        };
+      }, function(err) {
+        console.error("MapView FAILED: " + (err.message || err));
+        document.title = "ERROR";
+      });
+    });
+  </script>
+</body>
+</html>
