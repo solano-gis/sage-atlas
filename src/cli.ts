@@ -8,17 +8,13 @@ import { getDaemonInfo, sendCommand, stopDaemon } from "./renderer.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/**
- * Ensure the daemon is running. Spawns it if needed.
- * Returns daemon info (pid, apiPort, mapPort).
- */
 async function ensureDaemon(webmap?: string): Promise<{ pid: number; apiPort: number; mapPort: number }> {
-  // Check if already running
   const existing = getDaemonInfo();
   if (existing) return existing;
 
-  // Spawn daemon as detached child
-  const rendererPath = join(__dirname, "renderer.ts");
+  // Resolve renderer path — works with both tsx (src/) and compiled (dist/)
+  const ext = __dirname.includes("dist") ? "js" : "ts";
+  const rendererPath = join(__dirname, `renderer.${ext}`);
   const args = [rendererPath];
   if (webmap) args.push(`--webmap=${webmap}`);
 
@@ -87,6 +83,18 @@ program
   .description("Headless ArcGIS map renderer")
   .version("0.1.0");
 
+// Helper: print command result, extracting screenshot path if present
+function printResult(result: unknown) {
+  const r = result as Record<string, unknown>;
+  if (r.screenshot) {
+    const { screenshot, ...rest } = r;
+    if (Object.keys(rest).length > 0) console.log(JSON.stringify(rest, null, 2));
+    console.log(screenshot);
+  } else {
+    console.log(JSON.stringify(r, null, 2));
+  }
+}
+
 // --- goto ---
 program
   .command("goto")
@@ -99,20 +107,14 @@ program
   .option("--padding <number>", "Padding in pixels", parseInt)
   .action(async (opts) => {
     const info = await ensureDaemon();
-    const args: Record<string, unknown> = {};
+    const args: Record<string, unknown> = { screenshot: true };
     if (opts.apn) args.apn = opts.apn;
     if (opts.address) args.address = opts.address;
     if (opts.center) args.center = opts.center.split(",").map(Number);
     if (opts.extent) args.extent = opts.extent.split(",").map(Number);
     if (opts.zoom) args.zoom = opts.zoom;
     if (opts.padding) args.padding = opts.padding;
-
-    const result = await sendCommand(info, "goto", args);
-    console.log(JSON.stringify(result, null, 2));
-
-    // Auto-screenshot after navigation
-    const ss = await sendCommand(info, "screenshot", {});
-    console.log((ss as any).path);
+    printResult(await sendCommand(info, "goto", args));
   });
 
 // --- zoom ---
@@ -122,14 +124,11 @@ program
   .option("--levels <number>", "Number of zoom levels", parseInt)
   .action(async (direction: string, opts) => {
     const info = await ensureDaemon();
-    const result = await sendCommand(info, "zoom", {
+    printResult(await sendCommand(info, "zoom", {
       direction,
       levels: opts.levels,
-    });
-    console.log(JSON.stringify(result, null, 2));
-
-    const ss = await sendCommand(info, "screenshot", {});
-    console.log((ss as any).path);
+      screenshot: true,
+    }));
   });
 
 // --- layers ---
@@ -144,14 +143,9 @@ program
     const args: Record<string, unknown> = {};
     if (opts.show) args.show = opts.show.split(",").map((s: string) => s.trim());
     if (opts.hide) args.hide = opts.hide.split(",").map((s: string) => s.trim());
-
-    const result = await sendCommand(info, "layers", args);
-    if (opts.list || (!opts.show && !opts.hide)) {
-      console.log(JSON.stringify(result, null, 2));
-    } else {
-      const ss = await sendCommand(info, "screenshot", {});
-      console.log((ss as any).path);
-    }
+    const wantScreenshot = !!(opts.show || opts.hide);
+    if (wantScreenshot) args.screenshot = true;
+    printResult(await sendCommand(info, "layers", args));
   });
 
 // --- highlight ---
@@ -175,14 +169,8 @@ program
         ...(opts.outlineWidth && { outlineWidth: opts.outlineWidth }),
       };
     }
-
-    const result = await sendCommand(info, "highlight", args);
-    console.log(JSON.stringify(result, null, 2));
-
-    if (!opts.clear) {
-      const ss = await sendCommand(info, "screenshot", {});
-      console.log((ss as any).path);
-    }
+    if (!opts.clear) args.screenshot = true;
+    printResult(await sendCommand(info, "highlight", args));
   });
 
 // --- overlay ---
@@ -213,15 +201,9 @@ program
         };
       }
       if (opts.labelField) args.labelField = opts.labelField;
+      args.screenshot = true;
     }
-
-    const result = await sendCommand(info, "overlay", args);
-    console.log(JSON.stringify(result, null, 2));
-
-    if (!opts.remove) {
-      const ss = await sendCommand(info, "screenshot", {});
-      console.log((ss as any).path);
-    }
+    printResult(await sendCommand(info, "overlay", args));
   });
 
 // --- annotate ---
@@ -238,8 +220,7 @@ program
     const info = await ensureDaemon();
 
     if (opts.clear) {
-      const result = await sendCommand(info, "annotate", { clear: true });
-      console.log(JSON.stringify(result, null, 2));
+      printResult(await sendCommand(info, "annotate", { clear: true }));
       return;
     }
 
@@ -262,11 +243,7 @@ program
       });
     }
 
-    const result = await sendCommand(info, "annotate", { annotations });
-    console.log(JSON.stringify(result, null, 2));
-
-    const ss = await sendCommand(info, "screenshot", {});
-    console.log((ss as any).path);
+    printResult(await sendCommand(info, "annotate", { annotations, screenshot: true }));
   });
 
 // --- screenshot ---

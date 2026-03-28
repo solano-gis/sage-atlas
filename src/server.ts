@@ -9,7 +9,6 @@ export function startServer(port: number = 0): Promise<{ server: Server; port: n
   return new Promise((resolve, reject) => {
     const app = express();
 
-    // Serve the map page
     app.get("/", (_req, res) => {
       res.sendFile(join(__dirname, "page.html"));
     });
