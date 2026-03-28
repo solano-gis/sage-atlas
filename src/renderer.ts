@@ -12,6 +12,18 @@ const LOCKFILE = join(PROJECT_ROOT, ".atlas-daemon");
 const DEFAULT_WEBMAP = "a30df87e755e4cab87acb5d9181bc11c";
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
+// Named web map presets — expand as Ryan creates new AGOL web maps
+const WEBMAP_PRESETS: Record<string, string> = {
+  default: "a30df87e755e4cab87acb5d9181bc11c",
+  parcels: "a30df87e755e4cab87acb5d9181bc11c",
+  hazards: "1522f21627de455eb6e91ed24791bf1d",
+};
+
+/** Resolve a preset name or raw AGOL item ID to a web map ID */
+export function resolveWebmap(nameOrId: string): string {
+  return WEBMAP_PRESETS[nameOrId.toLowerCase()] || nameOrId;
+}
+
 import express from "express";
 import { createServer as createHttpServer } from "node:http";
 
@@ -155,9 +167,14 @@ export async function startDaemon(webmapId: string = DEFAULT_WEBMAP): Promise<vo
     let result: unknown;
 
     switch (command) {
-      case "goto":
+      case "goto": {
+        // Resolve webmap preset name to ID if provided
+        if (commandArgs.webmap) {
+          commandArgs.webmap = resolveWebmap(commandArgs.webmap as string);
+        }
         result = await page.evaluate((a) => (window as any).atlasGoTo(a), commandArgs);
         break;
+      }
 
       case "zoom":
         result = await page.evaluate(
@@ -192,10 +209,10 @@ export async function startDaemon(webmapId: string = DEFAULT_WEBMAP): Promise<vo
         return page.evaluate(() => (window as any).atlasGetState());
 
       case "webmap": {
-        const id = (commandArgs as { webmapId: string }).webmapId;
-        await page.goto(`http://127.0.0.1:${mapPort}?webmap=${id}`);
-        await page.waitForFunction(() => document.title === "READY", { timeout: 60000 });
-        return { webmapId: id };
+        const id = resolveWebmap((commandArgs as { webmapId: string }).webmapId);
+        await page.evaluate((wmId) => (window as any).swapWebMap(wmId), id);
+        result = { webmapId: id };
+        break;
       }
 
       default:

@@ -40,21 +40,40 @@
       SimpleFillSymbol, SimpleMarkerSymbol, SimpleLineSymbol, TextSymbol,
       locator, Color
     ) {
-      const params = new URLSearchParams(window.location.search);
-      const webmapId = params.get("webmap");
+      var params = new URLSearchParams(window.location.search);
+      var currentWebmapId = params.get("webmap");
 
-      const webmap = new WebMap({ portalItem: { id: webmapId } });
-      const highlightLayer = new GraphicsLayer({ title: "_highlights", listMode: "hide" });
-      const overlayGroup = new GraphicsLayer({ title: "_overlays", listMode: "hide" });
-      const annotationLayer = new GraphicsLayer({ title: "_annotations", listMode: "hide" });
+      var webmap = new WebMap({ portalItem: { id: currentWebmapId } });
+      var highlightLayer = new GraphicsLayer({ title: "_highlights", listMode: "hide" });
+      var overlayGroup = new GraphicsLayer({ title: "_overlays", listMode: "hide" });
+      var annotationLayer = new GraphicsLayer({ title: "_annotations", listMode: "hide" });
 
-      const view = new MapView({
+      var view = new MapView({
         container: "viewDiv",
         map: webmap,
         ui: { components: [] }
       });
 
       webmap.addMany([highlightLayer, overlayGroup, annotationLayer]);
+
+      // Swap web map without full page reload — preserves view extent and overlay layers
+      async function swapWebMap(newId) {
+        if (newId === currentWebmapId) return;
+        var center = [view.center.longitude, view.center.latitude];
+        var zoom = view.zoom;
+        var newMap = new WebMap({ portalItem: { id: newId } });
+        await newMap.load();
+        newMap.addMany([highlightLayer, overlayGroup, annotationLayer]);
+        view.map = newMap;
+        webmap = newMap;
+        currentWebmapId = newId;
+        await view.when();
+        // MapView animation controller needs a tick after when() before goTo works
+        await new Promise(function(r) { setTimeout(r, 500); });
+        await view.goTo({ center: center, zoom: zoom }, { duration: 0 });
+        await waitForTiles();
+        console.log("Swapped to web map: " + newId);
+      }
 
       function findParcelLayer() {
         var found = null;
@@ -63,7 +82,6 @@
             found = l;
           }
         });
-        if (!found) throw new Error("No parcel layer found in web map");
         return found;
       }
 
@@ -104,23 +122,25 @@
         document.title = "READY";
 
         window.waitForTiles = waitForTiles;
+        window.swapWebMap = swapWebMap;
+        window.currentWebmapId = function() { return currentWebmapId; };
 
         // --- Navigation ---
         window.atlasGoTo = async function(target) {
+          if (target.webmap) {
+            await swapWebMap(target.webmap);
+          }
+
           if (target.apn) {
             var parcelLayer = findParcelLayer();
+            if (!parcelLayer) throw new Error("No parcel layer in current web map");
 
+            var clean = target.apn.replace(/-/g, "");
             var query = parcelLayer.createQuery();
-            query.where = "APN = '" + target.apn.replace(/'/g, "''") + "'";
+            query.where = "asmtnum = '" + clean.replace(/'/g, "''") + "'";
             query.returnGeometry = true;
             query.outSpatialReference = view.spatialReference;
             var result = await parcelLayer.queryFeatures(query);
-            if (result.features.length === 0) {
-              // Try without dashes
-              var clean = target.apn.replace(/-/g, "");
-              query.where = "REPLACE(APN, '-', '') = '" + clean + "'";
-              result = await parcelLayer.queryFeatures(query);
-            }
             if (result.features.length === 0) throw new Error("APN not found: " + target.apn);
 
             var extent = result.features[0].geometry.extent;
@@ -195,7 +215,7 @@
             var parcelLayer = findParcelLayer();
 
             var whereClause = opts.apns.map(function(apn) {
-              return "APN = '" + apn.replace(/'/g, "''") + "'";
+              return "asmtnum = '" + apn.replace(/-/g, "").replace(/'/g, "''") + "'";
             }).join(" OR ");
 
             var query = parcelLayer.createQuery();
@@ -362,6 +382,7 @@
         // --- State ---
         window.atlasGetState = function() {
           return {
+            webmap: currentWebmapId,
             center: [view.center.longitude, view.center.latitude],
             zoom: view.zoom,
             scale: view.scale,
