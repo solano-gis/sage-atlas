@@ -154,6 +154,20 @@ program
     printResult(await sendCommand(info, "layers", args));
   });
 
+// --- measure ---
+program
+  .command("measure")
+  .description("Measure distance between two screen pixels")
+  .requiredOption("--from <x,y>", "Start pixel")
+  .requiredOption("--to <x,y>", "End pixel")
+  .action(async (opts) => {
+    const info = await ensureDaemon();
+    printResult(await sendCommand(info, "measure", {
+      from: opts.from.split(",").map(Number),
+      to: opts.to.split(",").map(Number),
+    }));
+  });
+
 // --- identify ---
 program
   .command("identify")
