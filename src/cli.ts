@@ -154,6 +154,24 @@ program
     printResult(await sendCommand(info, "layers", args));
   });
 
+// --- identify ---
+program
+  .command("identify")
+  .description("Query features at a point or within a rectangle")
+  .option("--pixel <x,y>", "Screen pixel to identify")
+  .option("--bbox <x1,y1,x2,y2>", "Screen pixel rectangle to query")
+  .option("--fields <fields>", "Comma-separated field names (default: all)")
+  .option("--limit <number>", "Max features per layer", parseInt)
+  .action(async (opts) => {
+    const info = await ensureDaemon();
+    const args: Record<string, unknown> = {};
+    if (opts.pixel) args.pixel = opts.pixel.split(",").map(Number);
+    if (opts.bbox) args.bbox = opts.bbox.split(",").map(Number);
+    if (opts.fields) args.fields = opts.fields.split(",").map((s: string) => s.trim());
+    if (opts.limit) args.limit = opts.limit;
+    printResult(await sendCommand(info, "identify", args));
+  });
+
 // --- highlight ---
 program
   .command("highlight")

@@ -190,6 +190,9 @@ export async function startDaemon(webmapId: string = DEFAULT_WEBMAP): Promise<vo
         );
         break;
 
+      case "identify":
+        return page.evaluate((a) => (window as any).atlasIdentify(a), commandArgs);
+
       case "highlight":
         result = await page.evaluate((a) => (window as any).atlasHighlight(a), commandArgs);
         break;

@@ -225,6 +225,68 @@
           return getLayerInfo(detailed);
         };
 
+        // --- Identify / Query ---
+        window.atlasIdentify = async function(opts) {
+          var geometry;
+
+          if (opts.pixel) {
+            // Single point identify from screen pixel
+            var mapPt = view.toMap({ x: opts.pixel[0], y: opts.pixel[1] });
+            if (!mapPt) throw new Error("Pixel outside map view: " + opts.pixel);
+            // Buffer the point slightly for hit tolerance
+            var res = view.resolution * 5;
+            geometry = new Extent({
+              xmin: mapPt.x - res, ymin: mapPt.y - res,
+              xmax: mapPt.x + res, ymax: mapPt.y + res,
+              spatialReference: view.spatialReference
+            });
+          } else if (opts.bbox) {
+            // Rectangle query from pixel coordinates [x1, y1, x2, y2]
+            var topLeft = view.toMap({ x: opts.bbox[0], y: opts.bbox[1] });
+            var bottomRight = view.toMap({ x: opts.bbox[2], y: opts.bbox[3] });
+            if (!topLeft || !bottomRight) throw new Error("Pixel bbox outside map view");
+            geometry = new Extent({
+              xmin: Math.min(topLeft.x, bottomRight.x),
+              ymin: Math.min(topLeft.y, bottomRight.y),
+              xmax: Math.max(topLeft.x, bottomRight.x),
+              ymax: Math.max(topLeft.y, bottomRight.y),
+              spatialReference: view.spatialReference
+            });
+          } else {
+            throw new Error("Provide --pixel or --bbox");
+          }
+
+          // Query all visible feature layers
+          var results = [];
+          var layerPromises = [];
+          webmap.allLayers.forEach(function(layer) {
+            if (layer.type === "feature" && layer.visible && layer.title && !layer.title.startsWith("_")) {
+              layerPromises.push(
+                layer.queryFeatures({
+                  geometry: geometry,
+                  spatialRelationship: "intersects",
+                  outFields: opts.fields || ["*"],
+                  returnGeometry: false,
+                  maxRecordCount: opts.limit || 20
+                }).then(function(result) {
+                  if (result.features.length > 0) {
+                    results.push({
+                      layer: layer.title,
+                      url: layer.url,
+                      count: result.features.length,
+                      features: result.features.map(function(f) { return f.attributes; })
+                    });
+                  }
+                }).catch(function(err) {
+                  results.push({ layer: layer.title, error: err.message });
+                })
+              );
+            }
+          });
+          await Promise.all(layerPromises);
+          return results;
+        };
+
         // --- Highlight ---
         window.atlasHighlight = async function(opts) {
           if (opts.clear) { highlightLayer.removeAll(); return { cleared: true }; }
