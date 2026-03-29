@@ -54,7 +54,7 @@
         ui: { components: [] }
       });
 
-      webmap.addMany([highlightLayer, overlayGroup, annotationLayer]);
+      // Overlay layers added after view.when() to ensure they're on top of all web map layers
 
       // Swap web map without full page reload — preserves view extent and overlay layers
       async function swapWebMap(newId) {
@@ -63,16 +63,25 @@
         var zoom = view.zoom;
         var newMap = new WebMap({ portalItem: { id: newId } });
         await newMap.load();
-        newMap.addMany([highlightLayer, overlayGroup, annotationLayer]);
         view.map = newMap;
         webmap = newMap;
         currentWebmapId = newId;
         await view.when();
+        pushOverlaysToTop();
         // MapView animation controller needs a tick after when() before goTo works
         await new Promise(function(r) { setTimeout(r, 500); });
         await view.goTo({ center: center, zoom: zoom }, { duration: 0 });
         await waitForTiles();
         console.log("Swapped to web map: " + newId);
+      }
+
+      // Force overlay layers to the top of the draw stack
+      function pushOverlaysToTop() {
+        var layers = webmap.layers;
+        [highlightLayer, overlayGroup, annotationLayer].forEach(function(gl) {
+          if (layers.includes(gl)) layers.remove(gl);
+          layers.add(gl);
+        });
       }
 
       function findParcelLayer() {
@@ -120,6 +129,10 @@
       view.when(function() {
         console.log("MapView ready");
         document.title = "READY";
+
+        // Add overlay layers on top of all web map layers
+        webmap.addMany([highlightLayer, overlayGroup, annotationLayer]);
+        pushOverlaysToTop();
 
         window.waitForTiles = waitForTiles;
         window.swapWebMap = swapWebMap;
