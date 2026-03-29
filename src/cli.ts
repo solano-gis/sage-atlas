@@ -142,11 +142,13 @@ program
   .option("--show <layers>", "Comma-separated layer names to show")
   .option("--hide <layers>", "Comma-separated layer names to hide")
   .option("--list", "List all layers with visibility")
+  .option("--detailed", "Include URLs and field names")
   .action(async (opts) => {
     const info = await ensureDaemon();
     const args: Record<string, unknown> = {};
     if (opts.show) args.show = opts.show.split(",").map((s: string) => s.trim());
     if (opts.hide) args.hide = opts.hide.split(",").map((s: string) => s.trim());
+    if (opts.detailed) args.detailed = true;
     const wantScreenshot = !!(opts.show || opts.hide);
     if (wantScreenshot) args.screenshot = true;
     printResult(await sendCommand(info, "layers", args));

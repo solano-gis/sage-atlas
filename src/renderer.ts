@@ -185,8 +185,8 @@ export async function startDaemon(webmapId: string = DEFAULT_WEBMAP): Promise<vo
 
       case "layers":
         result = await page.evaluate(
-          ({ show, hide }) => (window as any).atlasLayers(show, hide),
-          commandArgs as { show?: string[]; hide?: string[] }
+          ({ show, hide, detailed }) => (window as any).atlasLayers(show, hide, detailed),
+          commandArgs as { show?: string[]; hide?: string[]; detailed?: boolean }
         );
         break;
 

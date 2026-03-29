@@ -94,11 +94,18 @@
         return found;
       }
 
-      function getLayerInfo() {
+      function getLayerInfo(detailed) {
         var result = [];
         webmap.allLayers.forEach(function(l) {
           if (l.title && !l.title.startsWith("_")) {
-            result.push({ title: l.title, visible: l.visible, type: l.type });
+            var info = { title: l.title, visible: l.visible, type: l.type };
+            if (l.url) info.url = l.url;
+            if (detailed && l.fields && l.fields.length) {
+              info.fields = l.fields.map(function(f) {
+                return { name: f.name, alias: f.alias, type: f.type };
+              });
+            }
+            result.push(info);
           }
         });
         return result;
@@ -207,7 +214,7 @@
         };
 
         // --- Layer Control ---
-        window.atlasLayers = async function(show, hide) {
+        window.atlasLayers = async function(show, hide, detailed) {
           webmap.allLayers.forEach(function(layer) {
             if (layer.title && !layer.title.startsWith("_")) {
               if (show && show.includes(layer.title)) layer.visible = true;
@@ -215,7 +222,7 @@
             }
           });
           if (show || hide) await waitForTiles();
-          return getLayerInfo();
+          return getLayerInfo(detailed);
         };
 
         // --- Highlight ---
