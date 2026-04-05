@@ -18,30 +18,42 @@ async function ensureDaemon(webmap?: string): Promise<{ pid: number; apiPort: nu
   const args = [rendererPath];
   if (webmap) args.push(`--webmap=${webmap}`);
 
+  const isWindows = process.platform === "win32";
+
   return new Promise((resolve, reject) => {
-    const child = spawn("npx", ["tsx", ...args], {
-      cwd: join(__dirname, ".."),
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = isWindows
+      ? spawn("cmd", ["/c", "npx", "tsx", ...args], {
+          cwd: join(__dirname, ".."),
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        })
+      : spawn("npx", ["tsx", ...args], {
+          cwd: join(__dirname, ".."),
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
 
     let stdout = "";
     let stderr = "";
     let resolved = false;
+
+    function finish(info: { pid: number; apiPort: number; mapPort: number }) {
+      if (resolved) return;
+      resolved = true;
+      if (lockfilePoller) clearInterval(lockfilePoller);
+      child.unref();
+      resolve(info);
+    }
 
     child.stdout!.on("data", (data: Buffer) => {
       stdout += data.toString();
       // Daemon writes JSON info on first line when ready
       const lines = stdout.split("\n");
       for (const line of lines) {
-        if (line.trim() && !resolved) {
+        if (line.trim()) {
           try {
             const info = JSON.parse(line.trim());
-            if (info.apiPort) {
-              resolved = true;
-              child.unref();
-              resolve(info);
-            }
+            if (info.apiPort) finish(info);
           } catch {
             // Not JSON yet, keep waiting
           }
@@ -53,11 +65,23 @@ async function ensureDaemon(webmap?: string): Promise<{ pid: number; apiPort: nu
       stderr += data.toString();
     });
 
+    // On Windows, stdout through cmd.exe may not flush reliably.
+    // Poll the lockfile as a fallback signal that the daemon is ready.
+    let lockfilePoller: ReturnType<typeof setInterval> | undefined;
+    if (isWindows) {
+      lockfilePoller = setInterval(() => {
+        const info = getDaemonInfo();
+        if (info) finish(info);
+      }, 500);
+    }
+
     child.on("error", (err) => {
+      if (lockfilePoller) clearInterval(lockfilePoller);
       if (!resolved) reject(new Error(`Failed to spawn daemon: ${err.message}`));
     });
 
     child.on("exit", (code) => {
+      if (lockfilePoller) clearInterval(lockfilePoller);
       if (!resolved) {
         reject(new Error(`Daemon exited with code ${code}. stderr: ${stderr}`));
       }
@@ -66,6 +90,7 @@ async function ensureDaemon(webmap?: string): Promise<{ pid: number; apiPort: nu
     // Timeout after 90 seconds (ArcGIS initial load can be slow)
     setTimeout(() => {
       if (!resolved) {
+        if (lockfilePoller) clearInterval(lockfilePoller);
         child.kill();
         reject(new Error(`Daemon startup timed out. stderr: ${stderr}`));
       }

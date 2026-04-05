@@ -168,12 +168,12 @@
             if (target.zoom) await view.goTo({ zoom: target.zoom }, { duration: 0 });
           } else if (target.address) {
             var results = await locator.addressToLocations(
-              "https://geocode-api.arcgis.com/arcgis/rest/services/World/GeocodeServer",
-              { address: { SingleLine: target.address }, maxLocations: 1 }
+              "https://solanocountygis.com/server/rest/services/Solano_Public_Locator/GeocodeServer",
+              { address: { SingleLine: target.address }, maxLocations: 1, outSpatialReference: { wkid: 4326 } }
             );
             if (results.length === 0) throw new Error("Address not found: " + target.address);
             var loc = results[0].location;
-            await view.goTo({ center: loc, zoom: target.zoom || 17 }, { duration: 0 });
+            await view.goTo({ center: [loc.longitude, loc.latitude], zoom: target.zoom || 17 }, { duration: 0 });
           } else if (target.extent) {
             var parts = target.extent;
             var ext = new Extent({
